@@ -544,6 +544,13 @@ window.addEventListener('error', function (e) {
     font-size: 15px; box-shadow: 0 4px 14px rgba(0,0,0,.2); max-width: calc(100% - 32px);
   }
 
+  /* ---------- Wahl vor dem Start, etwa die Einmaleins-Reihe ---------- */
+  .optionswahl { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 10px; }
+  .optionsbereich { margin-bottom: 24px; }
+  .optionsknopf { font: inherit; font-weight: bold; min-width: 56px; padding: 8px 12px; cursor: pointer;
+                  background: #fff; color: var(--tinte); border: 2px solid var(--karo); border-radius: 6px; }
+  .optionsknopf[aria-pressed="true"] { background: var(--blau); border-color: var(--blau); color: #fff; }
+
 
 /* aus einem Spielmodul */
 .formen { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
@@ -553,6 +560,21 @@ window.addEventListener('error', function (e) {
   .formzeile .fest { background: var(--blau-hell); border-radius: 5px; padding: 4px 12px; }
   .bruchfeld { display: inline-flex; flex-direction: column; align-items: center; gap: 2px; }
   .bruchfeld .strich { width: 70px; height: 3px; background: var(--tinte); border-radius: 2px; }
+
+/* aus einem Spielmodul */
+.reihenfelder { display: grid; grid-template-columns: repeat(5, 74px); gap: 10px; justify-content: center; }
+  .reihenfelder input { width: 74px; }
+  .einmaleinszeilen { display: grid; grid-template-columns: repeat(2, auto); gap: 10px 36px;
+                      justify-content: center; font-size: 22px; font-weight: bold; }
+  .einmaleinszeilen > div { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+  .einmaleinszeilen input { width: 74px; }
+  .karten .karte.zahlkarte { font-size: 26px; font-weight: bold; min-width: 84px; padding: 16px 12px; line-height: 1.1; }
+  .karten.zahlkarten { display: grid; grid-template-columns: repeat(5, auto); justify-content: center; }
+  @media (max-width: 560px) {
+    .karten .karte.zahlkarte { font-size: 21px; min-width: 60px; padding: 12px 6px; }
+    .reihenfelder { grid-template-columns: repeat(3, 74px); }
+    .einmaleinszeilen { grid-template-columns: auto; }
+  }
 
 /* aus einem Spielmodul */
 .mauer { display: flex; flex-direction: column; align-items: center; gap: 7px; }
@@ -620,7 +642,9 @@ function modulKontext() {
     tausendstelAusEingabe,
     geldText,
     centAusEingabe,
-    gruppePruefen
+    gruppePruefen,
+    // Merkt sich, was in dieser Runde falsch war, fuer die Anzeige am Ende
+    notieren: text => { if (stand.notizen) stand.notizen.add(text); }
   };
 }
 
@@ -979,6 +1003,7 @@ function klassenSpanne(spielId) {
 
 function aufgabenProRunde() {
   const spiel = SPIELE[stand.spiel];
+  if (spiel && typeof spiel.aufgaben === 'function') return spiel.aufgaben(stand.stufe, aktuelleOption());
   return (spiel && spiel.aufgaben) || AUFGABEN_PRO_RUNDE;
 }
 
@@ -1079,14 +1104,30 @@ function listeSichern() {
 }
 
 function kennung(eintrag) {
-  return [eintrag.name, eintrag.spiel, eintrag.stufe, eintrag.ms, eintrag.datum].join('|');
+  return [eintrag.name, eintrag.spiel, eintrag.stufe, eintrag.option, eintrag.ms, eintrag.datum].join('|');
+}
+
+function eintragBereinigen(e) {
+  if (!e || typeof e !== 'object' || !SPIELE[e.spiel]) return null;
+  const zahl = (w, ersatz) => (Number.isFinite(Number(w)) ? Number(w) : ersatz);
+  const stufe = Math.round(zahl(e.stufe, 0));
+  if (stufe < 1 || stufe > SPIELE[e.spiel].stufen.length) return null;
+  return {
+    name: String(e.name || 'Ohne Namen').slice(0, 24), spiel: e.spiel, stufe,
+    ms: Math.max(0, zahl(e.ms, 0)), fehler: Math.max(0, Math.round(zahl(e.fehler, 0))),
+    uebersprungen: Math.max(0, Math.round(zahl(e.uebersprungen, 0))), datum: zahl(e.datum, 0),
+    ...(SPIELE[e.spiel].option && SPIELE[e.spiel].option.werte.some(w => w.wert === e.option)
+      ? { option: e.option } : {})
+  };
 }
 
 async function listeLaden(datei) {
   try {
     const text = await datei.text();
     const daten = JSON.parse(text);
-    const neue = (daten && daten.eintraege) || [];
+    // Eingelesene Eintraege werden neu aufgebaut. So landet aus einer fremden Datei
+    // nur, was wirklich ein Eintrag ist: Text bleibt Text, Zahlen bleiben Zahlen.
+    const neue = ((daten && daten.eintraege) || []).map(eintragBereinigen).filter(Boolean);
     const bekannt = new Set(stand.bestenliste.map(kennung));
     let dazu = 0;
     neue.forEach(e => {
@@ -1138,9 +1179,33 @@ function bestzeit(spielId) {
   return Math.min.apply(null, passend.map(e => e.ms));
 }
 
-function rangliste(spielId, stufe) {
+// Manche Spiele haben vor dem Start eine Wahl, etwa die Einmaleins-Reihe.
+// Sie gehoert zur Stufe dazu: Zeiten mit verschiedener Wahl werden nicht verglichen.
+function aktuelleOption(spielId = stand.spiel) {
+  const spiel = SPIELE[spielId];
+  if (!spiel || !spiel.option) return undefined;
+  const gemerkt = (stand.optionen || {})[spielId];
+  if (spiel.option.werte.some(w => w.wert === gemerkt)) return gemerkt;
+  return spiel.option.standard !== undefined ? spiel.option.standard : spiel.option.werte[0].wert;
+}
+
+function optionText(spielId, wert) {
+  const spiel = SPIELE[spielId];
+  if (!spiel || !spiel.option || wert === undefined) return '';
+  const w = spiel.option.werte.find(x => x.wert === wert);
+  return w ? w.text : '';
+}
+
+// Stufenname samt Wahl, zum Beispiel "durcheinander, 8er"
+function stufenText(spielId, stufe, option) {
+  const name = SPIELE[spielId].stufen[stufe - 1];
+  const zusatz = optionText(spielId, option);
+  return zusatz ? name + ', ' + zusatz : name;
+}
+
+function rangliste(spielId, stufe, option) {
   return stand.bestenliste
-    .filter(e => e.spiel === spielId && e.stufe === stufe)
+    .filter(e => e.spiel === spielId && e.stufe === stufe && e.option === option)
     .sort((a, b) => a.ms - b.ms);
 }
 
@@ -1182,7 +1247,7 @@ function zeichneHub() {
     ? `<table><thead><tr><th>Name</th><th>Spiel</th><th>Stufe</th><th class="zeit">Zeit</th>
         <th class="zeit">Fehler</th></tr></thead><tbody>
         ${alle.map(e => `<tr><td>${entschaerfen(e.name)}</td><td>${SPIELE[e.spiel].name}</td>
-          <td>${SPIELE[e.spiel].stufen[e.stufe - 1]}</td><td class="zeit">${zeitText(e.ms)}</td>
+          <td>${stufenText(e.spiel, e.stufe, e.option)}</td><td class="zeit">${zeitText(e.ms)}</td>
           <td class="zeit">${fehlerText(e)}</td></tr>`).join('')}
       </tbody></table>`
     : `<p>Hier stehen die schnellsten Runden, sobald jemand ein Spiel beendet hat.</p>`;
@@ -1239,7 +1304,7 @@ function spielWaehlen(id) {
 function zeichneAuswahl() {
   const spiel = SPIELE[stand.spiel];
   const knoepfe = spiel.stufen.map((text, i) => {
-    const beste = rangliste(stand.spiel, i + 1)[0];
+    const beste = rangliste(stand.spiel, i + 1, aktuelleOption())[0];
     const klasse = klasseFuerStufe(stand.spiel, i + 1);
     return `<button class="kachel" data-stufe="${i + 1}">
       ${klasse ? `<span class="klassenmarke">Klasse ${klasse}</span>` : ''}
@@ -1256,8 +1321,19 @@ function zeichneAuswahl() {
     </div>
     <h1>${spiel.name}</h1>
     <p class="unterzeile">${spiel.beschreibung}
-      Wähle eine Stufe, dann startet die Runde mit ${aufgabenProRunde()} Aufgaben.</p>
+      ${typeof spiel.aufgaben === 'function' ? 'Wähle eine Stufe, dann startet die Runde.'
+        : 'Wähle eine Stufe, dann startet die Runde mit ' + aufgabenProRunde() + ' Aufgaben.'}</p>
+    ${spiel.option ? `<p class="aufgabentext" style="text-align:left;margin:0 0 8px">${spiel.option.titel}</p>
+      <div class="optionsbereich">${[...new Set(spiel.option.werte.map(w => (w.gruppe === undefined ? 1 : w.gruppe)))].sort((x, y) => x - y).map(g => `<div class="optionswahl">${
+        spiel.option.werte.filter(w => (w.gruppe === undefined ? 1 : w.gruppe) === g).map(w => `<button class="optionsknopf"
+        data-option="${w.wert}" aria-pressed="${w.wert === aktuelleOption()}">${w.text}</button>`).join('')}</div>`).join('')}</div>` : ''}
     <div class="kacheln">${knoepfe}</div>`;
+
+  blatt.querySelectorAll('.optionsknopf').forEach(k => k.addEventListener('click', () => {
+    stand.optionen = stand.optionen || {};
+    stand.optionen[stand.spiel] = Number(k.dataset.option);
+    zeichnen();
+  }));
 
   document.getElementById('zurueck').addEventListener('click', () => {
     stand.ansicht = 'hub';
@@ -1275,6 +1351,7 @@ function rundeStarten(stufe) {
   stand.start = 0;
   stand.fehler = 0;
   stand.uebersprungen = 0;
+  stand.notizen = new Set();
   neueAufgabe();
 }
 
@@ -1282,7 +1359,10 @@ function neueAufgabe() {
   stand.geloest = false;
   stand.letzteProbe = null;
   const modul = SPIELMODULE[stand.spiel];
-  if (modul) stand.aufgabe = modul.aufgabe(stand.stufe);
+  if (modul) {
+    const opt = aktuelleOption();
+    stand.aufgabe = modul.aufgabe(stand.stufe, opt === undefined ? undefined : { [modul.option.name]: opt });
+  }
   else console.error('Kein Spielmodul für ' + stand.spiel);
   zeichnen();
   erstesFeldFokussieren(blatt);
@@ -1328,7 +1408,7 @@ function zeichneSpiel() {
       <span class="uhr" id="uhr">${stand.start ? zeitText(Date.now() - stand.start) : '0:00'}</span>
     </div>
     <h1>${spiel.name}</h1>
-    <p class="unterzeile">Stufe: ${spiel.stufen[stand.stufe - 1]}${
+    <p class="unterzeile">Stufe: ${stufenText(stand.spiel, stand.stufe, aktuelleOption())}${
       klasseFuerStufe(stand.spiel, stand.stufe)
         ? ' &nbsp;·&nbsp; Klasse ' + klasseFuerStufe(stand.spiel, stand.stufe) : ''}</p>
     <div class="buehne">
@@ -1638,7 +1718,9 @@ function antwortSignatur() {
 
 function markieren(schluessel, richtig) {
   const feld = blatt.querySelector(`input[data-feld="${schluessel}"]`);
-  if (feld) feld.classList.add(richtig ? 'richtig' : 'falsch');
+  if (!feld) return;
+  feld.classList.remove(richtig ? 'falsch' : 'richtig');
+  feld.classList.add(richtig ? 'richtig' : 'falsch');
 }
 
 function pruefen() {
@@ -1752,12 +1834,14 @@ function zeichneErgebnis() {
   const spiel = SPIELE[stand.spiel];
   blatt.innerHTML = `
     <h1>Runde geschafft</h1>
-    <p class="unterzeile">${spiel.name}, Stufe „${spiel.stufen[stand.stufe - 1]}“,
-      ${aufgabenProRunde()} Aufgaben in <strong>${zeitText(dauer)}</strong>,
+    <p class="unterzeile">${spiel.name}, Stufe „${stufenText(stand.spiel, stand.stufe, aktuelleOption())}“,
+      ${aufgabenProRunde() === 1 ? "eine Aufgabe" : aufgabenProRunde() + " Aufgaben"} in <strong>${zeitText(dauer)}</strong>,
       ${stand.fehler === 0 ? 'ohne einen Fehlversuch' :
         stand.fehler === 1 ? 'mit einem Fehlversuch' : 'mit ' + stand.fehler + ' Fehlversuchen'}${
         stand.uebersprungen ? ', ' + stand.uebersprungen +
           (stand.uebersprungen === 1 ? ' Aufgabe übersprungen' : ' Aufgaben übersprungen') : ''}.</p>
+    ${stand.notizen && stand.notizen.size ? `<div class="liste" style="margin:0 0 18px">
+      <h2>Hat noch gehakt</h2><p>${[...stand.notizen].map(entschaerfen).join(' &nbsp;·&nbsp; ')}</p></div>` : ''}
     <div class="buehne">
       <p class="aufgabentext">Trage deinen Namen ein, dann kommt deine Zeit in die Liste.</p>
       <input type="text" id="name" maxlength="14" style="width:220px;text-align:left"
@@ -1787,6 +1871,7 @@ function zeichneErgebnis() {
     const eintrag = { name, spiel: stand.spiel, stufe: stand.stufe, ms: dauer,
                       fehler: stand.fehler, uebersprungen: stand.uebersprungen,
                       datum: Date.now() };
+    if (aktuelleOption() !== undefined) eintrag.option = aktuelleOption();
     stand.bestenliste.push(eintrag);
     stand.letzterName = name;
     await bestenlisteSpeichern();
@@ -1796,7 +1881,7 @@ function zeichneErgebnis() {
 
 function zeichneRangliste(eintrag) {
   const spiel = SPIELE[eintrag.spiel];
-  const liste = rangliste(eintrag.spiel, eintrag.stufe);
+  const liste = rangliste(eintrag.spiel, eintrag.stufe, eintrag.option);
   const platz = liste.findIndex(e => e === eintrag) + 1;
   const zeilen = liste.slice(0, 10).map((e, i) => `
     <tr class="${e === eintrag ? 'ich' : ''}">
@@ -1806,7 +1891,7 @@ function zeichneRangliste(eintrag) {
 
   blatt.innerHTML = `
     <h1>Platz ${platz} von ${liste.length}</h1>
-    <p class="unterzeile">${spiel.name}, Stufe „${spiel.stufen[eintrag.stufe - 1]}“.</p>
+    <p class="unterzeile">${spiel.name}, Stufe „${stufenText(eintrag.spiel, eintrag.stufe, eintrag.option)}“.</p>
     <div class="liste">
       <table><thead><tr><th>Platz</th><th>Name</th><th class="zeit">Zeit</th>
         <th class="zeit">Fehler</th></tr></thead>
@@ -1965,9 +2050,13 @@ function additionMeldung(ziffern, uebertraege, wort) {
 // ============================================================
 
 // loesung ist ein Feld aus true und false, je Karte eines.
-function kartenPruefen(loesung, ctx) {
+function kartenPruefen(loesung, ctx, wort = 'Figur') {
   const falsche = [];
   const karten = [...ctx.blatt.querySelectorAll('.karte')];
+  // Ohne Auswahl ist es noch keine Antwort, also auch kein Fehlversuch
+  if (!karten.some(k => k.getAttribute('aria-pressed') === 'true')) {
+    return { offen: 'Tippe zuerst eine ' + wort + ' an.' };
+  }
   let daneben = 0, fehlend = 0;
   karten.forEach((karte, i) => {
     const gewaehlt = karte.getAttribute('aria-pressed') === 'true';
@@ -1982,10 +2071,10 @@ function kartenPruefen(loesung, ctx) {
   const hinweis = daneben && fehlend
     ? 'Eine Auswahl ist zu viel und eine fehlt noch.'
     : daneben
-      ? (daneben === 1 ? 'Eine angetippte Figur passt nicht.'
-                       : daneben + ' angetippte Figuren passen nicht.')
-      : (fehlend === 1 ? 'Eine passende Figur fehlt noch.'
-                       : fehlend + ' passende Figuren fehlen noch.');
+      ? (daneben === 1 ? 'Eine angetippte ' + wort + ' passt nicht.'
+                       : daneben + ' angetippte ' + wort + 'en passen nicht.')
+      : (fehlend === 1 ? 'Eine passende ' + wort + ' fehlt noch.'
+                       : fehlend + ' passende ' + wort + 'en fehlen noch.');
   return { falsche, hinweis };
 }
 
@@ -2496,11 +2585,67 @@ function diagnoseDatei(lauf) {
   URL.revokeObjectURL(verweis.href);
 }
 
+// Eine Diagnose aus einer Datei kann von irgendwoher stammen. Sie wird deshalb
+// Feld fuer Feld neu aufgebaut: nur bekannte Spiele und Bereiche, Zahlen als Zahlen,
+// und die festgehaltenen Spielfelder ohne Skripte und Ereignis-Attribute.
+function diagnoseBereinigen(roh) {
+  if (!roh || typeof roh !== 'object' || !roh.spiele || typeof roh.spiele !== 'object') return null;
+  const planKey = DIAGNOSE_PLAENE[roh.plan] ? roh.plan : 'grund';
+  const plan = DIAGNOSE_PLAENE[planKey];
+  const zahl = (w, ersatz) => (Number.isFinite(Number(w)) ? Number(w) : ersatz);
+  const lauf = {
+    id: zahl(roh.id, Date.now()), name: String(roh.name || 'Ohne Namen').slice(0, 24),
+    beginn: zahl(roh.beginn, 0), ende: roh.ende === null ? null : zahl(roh.ende, null),
+    fassung: DIAGNOSE_FASSUNG, plan: planKey,
+    bereiche: (Array.isArray(roh.bereiche) ? roh.bereiche : []).filter(id => plan.bereiche.some(b => b.id === id)),
+    runde: 0, nummer: 0, schlange: [], aktuell: null, spiele: {}
+  };
+  const zustaende = ['laeuft', 'wartet', 'fertig', 'gestoppt', 'ausgelassen', 'abgebrochen'];
+  plan.bereiche.filter(b => lauf.bereiche.includes(b.id)).forEach(b => b.spiele.forEach(e => {
+    const s = roh.spiele[e.key];
+    if (!s || typeof s !== 'object') return;
+    lauf.spiele[e.key] = {
+      idx: Math.max(0, Math.round(zahl(s.idx, 0))),
+      status: zustaende.includes(s.status) ? s.status : 'abgebrochen',
+      grund: String(s.grund || '').slice(0, 200),
+      stufen: e.stufen.map((_, i) => ((Array.isArray(s.stufen) && Array.isArray(s.stufen[i])) ? s.stufen[i] : [])
+        .slice(0, 3).map(x => ({
+          punkte: [0, 0.5, 1].includes(Number(x && x.punkte)) ? Number(x.punkte) : 0,
+          art: ['richtig', 'falsch', 'weissnicht'].includes(x && x.art) ? x.art : 'falsch',
+          versuche: Math.max(0, Math.min(3, Math.round(zahl(x && x.versuche, 0)))),
+          ms: Math.max(0, zahl(x && x.ms, 0)),
+          gegenprobe: !!(x && x.gegenprobe),
+          kind: x && x.kind ? schnappschussReinigen(String(x.kind)) : null,
+          loesung: x && x.loesung ? schnappschussReinigen(String(x.loesung)) : null
+        })))
+    };
+  }));
+  lauf.nummer = Object.values(lauf.spiele).reduce((n, s) => n + s.stufen.reduce((m, st) => m + st.length, 0), 0);
+  return Object.keys(lauf.spiele).length ? lauf : null;
+}
+
+// Entfernt aus einem gespeicherten Spielfeld alles, was Code ausfuehren koennte.
+// Ein template-Element liest HTML ein, ohne Bilder zu laden oder Skripte zu starten.
+function schnappschussReinigen(html) {
+  const vorlage = document.createElement('template');
+  vorlage.innerHTML = html;
+  vorlage.content.querySelectorAll('script, iframe, object, embed, link, meta, style, foreignObject, form, a')
+    .forEach(x => x.remove());
+  vorlage.content.querySelectorAll('*').forEach(el => {
+    [...el.attributes].forEach(attr => {
+      const name = attr.name.toLowerCase();
+      if (name.startsWith('on') || name === 'href' || name === 'xlink:href' || name === 'src'
+          || name === 'srcdoc' || name === 'formaction' || name === 'action') el.removeAttribute(attr.name);
+    });
+  });
+  return vorlage.innerHTML;
+}
+
 async function diagnoseEinlesen(datei) {
   try {
     const daten = JSON.parse(await datei.text());
-    const lauf = daten && daten.art === 'mathe-hub-diagnose' ? daten.diagnose : null;
-    if (!lauf || !lauf.spiele) throw new Error('keine Diagnose');
+    const lauf = daten && daten.art === 'mathe-hub-diagnose' ? diagnoseBereinigen(daten.diagnose) : null;
+    if (!lauf) throw new Error('keine Diagnose');
     if (!diag.fertige.some(x => x.id === lauf.id)) {
       diag.fertige.push(lauf);
       await diagnoseSpeichern();
@@ -2556,8 +2701,8 @@ function zeichneDiagnoseStart() {
     const a = diagnoseAuswerten(l);
     return `<tr><td>${entschaerfen(l.name)}</td><td>${planVon(l).name.split(':')[0]}</td><td>${datumText(l.beginn)}</td>
       <td class="zeit">${a.aufgaben}</td><td class="zeit">${a.zuerst.length}</td>
-      <td class="zeit"><button class="schlicht klein" data-oeffnen="${l.id}">Öffnen</button>
-        <button class="schlicht klein" data-loeschen="${l.id}">Löschen</button></td></tr>`;
+      <td class="zeit"><button class="schlicht klein" data-oeffnen="${entschaerfen(l.id)}">Öffnen</button>
+        <button class="schlicht klein" data-loeschen="${entschaerfen(l.id)}">Löschen</button></td></tr>`;
   }).join('');
 
   blatt.innerHTML = `
@@ -3343,6 +3488,222 @@ spielAnmelden({
   loesung(a, ctx) {
     const werte = {};
     werte.ergebnis = a.ergebnis; werte.rest = a.rest;
+    felderEintragen(werte, ctx);
+  }
+});
+
+
+/* ----- spiele/einmaleins.js ----- */
+// ============================================================
+// einmaleins
+// Die Reihen des kleinen Einmaleins. Vor dem Start wird die Reihe gewaehlt
+// (2er bis 10er) oder "alle", dann kommt jede Aufgabe aus einer anderen Reihe.
+// Stufe 1: ganze Reihe aufschreiben, zehn leere Felder
+// Stufe 2: die Malaufgaben der Reihe durcheinander
+// Stufe 3: aus Zahlenkarten alle Vielfachen antippen
+// Stufe 4: umkehren, also geteilt und Platzhalter
+// Stufe 5: Mal, Tauschaufgabe und Geteilt gemischt
+// Was falsch war, wird notiert und am Ende der Runde als "hakt noch" gezeigt.
+// ============================================================
+// Die Wahl kodiert Reihe und Groessenordnung:
+//   2 bis 10   eine Einerreihe (8er: 8, 16, 24 ...)
+//   20 bis 100 eine Zehnerreihe (80er: 80, 160, 240 ...)
+//   0          alle Einerreihen, 1 alle Zehnerreihen, -1 alle zusammen
+// faktor 0 heisst: bei jeder Ziehung neu zwischen Einer- und Zehnerreihe waehlen
+function einmaleinsWahl(vorgabe) {
+  const r = vorgabe && vorgabe.reihe;
+  if (r >= 2 && r <= 10) return { fest: r, faktor: 1 };
+  if (r >= 20 && r <= 100 && r % 10 === 0) return { fest: r, faktor: 10 };
+  return { fest: 0, faktor: r === 1 ? 10 : r === -1 ? 0 : 1 };
+}
+
+function reiheZiehen(faktor) {
+  return zufall(2, 10) * (faktor || (zufall(0, 1) === 0 ? 1 : 10));
+}
+
+function mischen(liste) {
+  for (let i = liste.length - 1; i > 0; i--) {
+    const j = zufall(0, i);
+    [liste[i], liste[j]] = [liste[j], liste[i]];
+  }
+  return liste;
+}
+
+// Zehn verschiedene Malaufgaben, entweder aus einer Reihe oder aus allen.
+function einmaleinsPaare(reihe, faktor) {
+  if (reihe) return mischen([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]).map(k => ({ k, n: reihe }));
+  const paare = [], gesehen = new Set();
+  while (paare.length < 10) {
+    const n = reiheZiehen(faktor), k = zufall(2, 10);
+    if (gesehen.has(k + '|' + n)) continue;
+    gesehen.add(k + '|' + n);
+    paare.push({ k, n });
+  }
+  return paare;
+}
+
+let einmaleinsZuletzt = [];
+
+function einmaleinsAufgabe(stufe, vorgabe) {
+  const wahl = einmaleinsWahl(vorgabe);
+  const gewaehlt = wahl.fest;
+  // Bei "alle" kommt nicht zweimal hintereinander dieselbe Reihe
+  let n = gewaehlt;
+  if (!n) {
+    do { n = reiheZiehen(wahl.faktor); } while (einmaleinsZuletzt.includes(n));
+    einmaleinsZuletzt = [n].concat(einmaleinsZuletzt).slice(0, 2);
+  }
+
+  if (stufe === 1) {
+    return { art: 'reihe', n, werte: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(k => k * n) };
+  }
+
+  if (stufe === 3) {
+    // Fuenf Vielfache und fuenf Zahlen, die knapp danebenliegen
+    const treffer = mischen([2, 3, 4, 5, 6, 7, 8, 9, 10].map(k => k * n)).slice(0, 5);
+    const daneben = new Set();
+    let schutz = 0;
+    // Bei Zehnerreihen sind auch die falschen Zahlen Zehnerzahlen, sonst waeren sie zu leicht zu erkennen
+    const zehner = n % 10 === 0 && n > 10;
+    while (daneben.size < 5 && schutz++ < 500) {
+      const z = zehner ? zufall(n / 10 + 1, n) * 10 : zufall(n + 1, n * 10);
+      if (z % n !== 0 && !daneben.has(z)) daneben.add(z);
+    }
+    const zahlen = mischen(treffer.concat([...daneben]));
+    return { art: 'karten', n, zahlen, loesung: zahlen.map(z => z % n === 0) };
+  }
+
+  // Stufe 2, 4 und 5: zehn Zeilen
+  const paare = einmaleinsPaare(gewaehlt, wahl.faktor);
+  const zeilen = paare.map(({ k, n: m }, i) => {
+    let form = 'mal';
+    if (stufe === 4) form = i % 2 === 0 ? 'geteilt' : 'luecke';
+    if (stufe === 5) form = ['mal', 'tausch', 'geteilt', 'luecke'][zufall(0, 3)];
+    const soll = form === 'mal' || form === 'tausch' ? k * m : k;
+    return { k, n: m, form, soll };
+  });
+  if (stufe === 4) mischen(zeilen);
+  return { art: 'zeilen', n: gewaehlt, faktor: wahl.faktor, zeilen };
+}
+
+function einmaleinsFeldText(z, i) {
+  const feld = `<input type="number" inputmode="numeric" data-feld="z${i}" aria-label="Aufgabe ${i + 1}">`;
+  if (z.form === 'mal') return `<span>${z.k} · ${z.n} =</span>${feld}`;
+  if (z.form === 'tausch') return `<span>${z.n} · ${z.k} =</span>${feld}`;
+  if (z.form === 'geteilt') return `<span>${z.k * z.n} : ${z.n} =</span>${feld}`;
+  return `${feld}<span>· ${z.n} = ${z.k * z.n}</span>`;
+}
+
+// So wird eine Aufgabe in der Notiz am Rundenende geschrieben
+function einmaleinsNotiz(z) {
+  if (z.form === 'geteilt' || z.form === 'luecke') return (z.k * z.n) + ' : ' + z.n;
+  return z.k + ' · ' + z.n;
+}
+
+spielAnmelden({
+  id: 'einmaleins',
+  name: 'Einmaleins-Reihen',
+  beschreibung: 'Die Reihen des kleinen Einmaleins, auch als Zehnerreihen wie 80, 160, 240: aufschreiben, durcheinander rechnen, wiedererkennen und umkehren.',
+  stufen: ['ganze Reihe', 'durcheinander', 'gehört dazu?', 'umkehren', 'Mal und Geteilt gemischt'],
+  klassen: [2, 2, 2, 2, 3],
+  // Mit fester Reihe deckt eine Aufgabe schon die ganze Reihe ab. Drei davon
+  // waeren dreimal dasselbe. Nur "gehört dazu?" bringt jedes Mal andere Zahlen.
+  aufgaben(stufe, reihe) {
+    const fest = (reihe >= 2 && reihe <= 10) || reihe >= 20;
+    return fest && stufe !== 3 ? 1 : 3;
+  },
+  option: {
+    name: 'reihe', titel: 'Welche Reihe?',
+    standard: 0,
+    werte: [{ wert: -1, text: 'alle Reihen (Einer und Zehner)', gruppe: 0 }, { wert: 0, text: 'alle Einer' }]
+      .concat([2, 3, 4, 5, 6, 7, 8, 9, 10].map(r => ({ wert: r, text: r + 'er' })))
+      .concat([{ wert: 1, text: 'alle Zehner', gruppe: 2 }])
+      .concat([20, 30, 40, 50, 60, 70, 80, 90, 100].map(r => ({ wert: r, text: r + 'er', gruppe: 2 })))
+  },
+  bild: `<svg viewBox="0 0 60 44" width="60" height="44" aria-hidden="true">
+      <g font-weight="bold" text-anchor="middle">
+        <text x="12" y="17" font-size="11" fill="#16263F">8</text>
+        <text x="30" y="17" font-size="11" fill="#16263F">16</text>
+        <text x="48" y="17" font-size="11" fill="#16263F">24</text>
+      </g>
+      <g fill="#fff" stroke="#1D4ED8" stroke-width="1.8" stroke-dasharray="3 2">
+        <rect x="3" y="24" width="17" height="13" rx="2"/><rect x="22" y="24" width="17" height="13" rx="2"/>
+        <rect x="41" y="24" width="17" height="13" rx="2"/>
+      </g>
+    </svg>`,
+  stil: `
+  .reihenfelder { display: grid; grid-template-columns: repeat(5, 74px); gap: 10px; justify-content: center; }
+  .reihenfelder input { width: 74px; }
+  .einmaleinszeilen { display: grid; grid-template-columns: repeat(2, auto); gap: 10px 36px;
+                      justify-content: center; font-size: 22px; font-weight: bold; }
+  .einmaleinszeilen > div { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+  .einmaleinszeilen input { width: 74px; }
+  .karten .karte.zahlkarte { font-size: 26px; font-weight: bold; min-width: 84px; padding: 16px 12px; line-height: 1.1; }
+  .karten.zahlkarten { display: grid; grid-template-columns: repeat(5, auto); justify-content: center; }
+  @media (max-width: 560px) {
+    .karten .karte.zahlkarte { font-size: 21px; min-width: 60px; padding: 12px 6px; }
+    .reihenfelder { grid-template-columns: repeat(3, 74px); }
+    .einmaleinszeilen { grid-template-columns: auto; }
+  }`,
+
+  aufgabe: einmaleinsAufgabe,
+
+  feld(a) {
+    if (a.art === 'reihe') {
+      const felder = a.werte.map((_, i) =>
+        `<input type="number" inputmode="numeric" data-feld="r${i}" aria-label="${i + 1}. Zahl der Reihe">`).join('');
+      return `<p class="aufgabentext">Schreibe die <strong>${a.n}er-Reihe</strong> auf,
+        von 1 · ${a.n} bis 10 · ${a.n}.</p>
+        <div class="reihenfelder">${felder}</div>`;
+    }
+    if (a.art === 'karten') {
+      const karten = a.zahlen.map((z, i) =>
+        `<button type="button" class="karte zahlkarte" data-karte="${i}" aria-pressed="false"
+           aria-label="${z} auswählen">${z}</button>`).join('');
+      return `<p class="aufgabentext">Tippe alle Zahlen an, die in der <strong>${a.n}er-Reihe</strong> vorkommen.</p>
+        <div class="karten zahlkarten">${karten}</div>`;
+    }
+    const zeilen = a.zeilen.map((z, i) => `<div>${einmaleinsFeldText(z, i)}</div>`).join('');
+    return `<p class="aufgabentext">${a.n ? 'Aufgaben aus der <strong>' + a.n + 'er-Reihe</strong>.'
+      : a.faktor === 10 ? 'Aufgaben aus allen Zehnerreihen.' : a.faktor === 1 ? 'Aufgaben aus allen Einerreihen.'
+      : 'Aufgaben aus allen Reihen, Einer- und Zehnerreihen gemischt.'} Rechne alle aus.</p>
+      <div class="einmaleinszeilen">${zeilen}</div>`;
+  },
+
+  pruefe(a, ctx) {
+    if (a.art === 'karten') {
+      const erg = kartenPruefen(a.loesung, ctx, 'Zahl');
+      // Uebersehene Vielfache und falsch angetippte Zahlen notieren
+      ctx.blatt.querySelectorAll('.karte').forEach((karte, i) => {
+        const gewaehlt = karte.getAttribute('aria-pressed') === 'true';
+        if (gewaehlt !== a.loesung[i] && !erg.offen) {
+          ctx.notieren(a.zahlen[i] + (a.loesung[i] ? ' gehört zur ' : ' gehört nicht zur ') + a.n + 'er-Reihe');
+        }
+      });
+      return erg;
+    }
+    let falsch = 0;
+    if (a.art === 'reihe') {
+      a.werte.forEach((soll, i) => {
+        const richtig = Number(ctx.werte['r' + i]) === soll;
+        ctx.markieren('r' + i, richtig);
+        if (!richtig) { falsch++; ctx.notieren((i + 1) + ' · ' + a.n); }
+      });
+    } else {
+      a.zeilen.forEach((z, i) => {
+        const richtig = Number(ctx.werte['z' + i]) === z.soll;
+        ctx.markieren('z' + i, richtig);
+        if (!richtig) { falsch++; ctx.notieren(einmaleinsNotiz(z)); }
+      });
+    }
+    return { falsche: falsch ? [falsch === 1 ? 'eine Zahl' : falsch + ' Zahlen'] : [] };
+  },
+
+  loesung(a, ctx) {
+    if (a.art === 'karten') { kartenLoesung(a.loesung, ctx); return; }
+    const werte = {};
+    if (a.art === 'reihe') a.werte.forEach((w, i) => { werte['r' + i] = w; });
+    else a.zeilen.forEach((z, i) => { werte['z' + i] = z.soll; });
     felderEintragen(werte, ctx);
   }
 });
@@ -4458,7 +4819,7 @@ spielAnmelden({
     let hinweis = '';
     const k = a;
     const gesetzt = [...blatt.querySelectorAll('.gitterpunkt.gesetzt')];
-    if (!gesetzt.length) { melden('Tippe zuerst einen Punkt an.', false); return; }
+    if (!gesetzt.length) return { offen: 'Tippe zuerst einen Punkt an.' };
 
     const soll = new Set(k.punkte.map(p => p.x + '|' + p.y));
     let daneben = 0;
@@ -4969,7 +5330,7 @@ spielAnmelden({
     const namenS = a.zifS.map((_, j) => 's' + j);
     const gS = gruppePruefen(namenS, String(a.produkt), ctx.werte);
     if (gS.leer) offen = true; else if (!gS.richtig) ergebnisFalsch++;
-    if (offen) { melden('Es fehlt noch eine Eingabe.', false); return; }
+    if (offen) return { offen: 'Es fehlt noch eine Eingabe.' };
     if (teilFalsch) falsche.push('Teilprodukt');
     if (ergebnisFalsch) falsche.push('Ergebnis');
     hinweis = multiplikationMeldung(teilFalsch, ergebnisFalsch);
@@ -5402,15 +5763,14 @@ spielAnmelden({
       const euro = Number(ctx.werte[euroFeld]);
       const cent = centFeld ? Number(ctx.werte[centFeld]) : 0;
       const betrag = euro * 100 + cent;
-      const stimmt = betrag === soll;
-      const schreibweise = centFeld ? cent < 100 : true;
-      ctx.markieren(euroFeld, stimmt && schreibweise);
-      if (centFeld) ctx.markieren(centFeld, stimmt && schreibweise);
-      if (!stimmt) falsche.push(wort);
-      else if (!schreibweise) {
-        falsche.push('die Schreibweise');
-        hinweis = 'Der Betrag stimmt, aber die Cent müssen kleiner als 100 sein.';
-      }
+      // Euro und Cent werden einzeln markiert, damit man sieht, welcher Teil nicht stimmt
+      const euroRichtig = euro === Math.floor(soll / 100);
+      const centRichtig = !centFeld || cent === soll % 100;
+      ctx.markieren(euroFeld, euroRichtig);
+      if (centFeld) ctx.markieren(centFeld, centRichtig);
+      if (euroRichtig && centRichtig) return;
+      falsche.push(wort);
+      if (betrag === soll) hinweis = 'Der Betrag stimmt, aber die Cent müssen kleiner als 100 sein.';
     };
     if (r.art === 'summe') pruefeBetrag('summeEuro', 'summeCent', r.summe, 'die Summe');
     pruefeBetrag('euro', r.art === 'einfach' ? null : 'cent', r.rueckgeld, 'das Rückgeld');
@@ -5820,7 +6180,7 @@ spielAnmelden({
       if (gR.leer) offen = true; else if (!gR.richtig) schemaFalsch++;
     });
 
-    if (offen) { melden('Es fehlt noch eine Eingabe.', false); return; }
+    if (offen) return { offen: 'Es fehlt noch eine Eingabe.' };
     if (ergebnisFalsch) falsche.push('Ergebnis');
     if (schemaFalsch) falsche.push('Schema');
     hinweis = divisionMeldung(ergebnisFalsch, schemaFalsch);
@@ -6502,7 +6862,7 @@ function zeitspanneAufgabe(stufe) {
     const gesamt = startH * 60 + startM + dauer;
     return {
       art: 'stundenUndMinuten', startH, startM,
-      endeH: ((Math.floor(gesamt / 60) - 1) % 12) + 1,
+      endeH: Math.floor(gesamt / 60),   // laeuft ueber 12 weiter: 12:25 + 50 min = 13:15
       endeM: gesamt % 60,
       dauer, dauerStunden: Math.floor(dauer / 60), dauerMinuten: dauer % 60
     };
@@ -6512,7 +6872,7 @@ function zeitspanneAufgabe(stufe) {
   const gesamt = startH * 60 + startM + dauer;
   return {
     art: 'endzeit', startH, startM,
-    endeH: ((Math.floor(gesamt / 60) - 1) % 12) + 1,
+    endeH: Math.floor(gesamt / 60),   // laeuft ueber 12 weiter: 12:25 + 50 min = 13:15
     endeM: gesamt % 60,
     dauer, dauerStunden: Math.floor(dauer / 60), dauerMinuten: dauer % 60
   };
@@ -6586,16 +6946,22 @@ spielAnmelden({
       if (!richtig) falsche.push('die Dauer');
     } else if (z.art === 'stundenUndMinuten') {
       const st = Number(ctx.werte.stunden), mi = Number(ctx.werte.minuten);
-      const stimmt = st * 60 + mi === z.dauer;
-      const normal = mi < 60;
-      ctx.markieren('stunden', stimmt && normal);
-      ctx.markieren('minuten', stimmt && normal);
-      if (!stimmt) falsche.push('die Dauer');
-      else if (!normal) hinweis = 'Der Betrag stimmt, aber die Minuten müssen kleiner als 60 sein.';
-      if (stimmt && !normal) falsche.push('die Schreibweise');
+      // Jedes Feld fuer sich markieren, damit man sieht, was nicht stimmt
+      const stundenRichtig = st === z.dauerStunden;
+      const minutenRichtig = mi === z.dauerMinuten;
+      ctx.markieren('stunden', stundenRichtig);
+      ctx.markieren('minuten', minutenRichtig);
+      if (!stundenRichtig) falsche.push('die Stunden');
+      if (!minutenRichtig) falsche.push('die Minuten');
+      // Sonderfall: insgesamt richtig, aber mit 60 Minuten oder mehr geschrieben
+      if (falsche.length && st * 60 + mi === z.dauer) {
+        hinweis = 'Die Dauer stimmt, aber die Minuten müssen kleiner als 60 sein. 60 Minuten sind eine Stunde.';
+      }
     } else {
       const st = Number(ctx.werte.stunde), mi = Number(ctx.werte.minute);
-      const stundeRichtig = st === z.endeH || (st === 0 && z.endeH === 12);
+      // Die Uhr zeigt nicht, ob Vor- oder Nachmittag ist. 13:15 und 1:15 sind
+      // dieselbe Zeigerstellung, deshalb zaehlt beides.
+      const stundeRichtig = Number.isInteger(st) && st >= 0 && st < 24 && st % 12 === z.endeH % 12;
       const minuteRichtig = mi === z.endeM;
       ctx.markieren('stunde', stundeRichtig);
       ctx.markieren('minute', minuteRichtig);
