@@ -1759,8 +1759,10 @@ function pruefen() {
     stand.letzteProbe = signatur;
 
     // Dieselbe Antwort noch einmal zu pruefen ist kein neuer Fehlversuch
+    // Spiele mit vielen Einzelaufgaben auf einem Blatt melden selbst, wie viele
+    // Antworten neu falsch sind. Sonst zaehlt jedes Pruefen als ein Fehlversuch.
     if (!unveraendert) {
-      stand.fehler++;
+      stand.fehler += typeof ergebnis.fehlerAnzahl === 'number' ? ergebnis.fehlerAnzahl : 1;
       const anzeige = document.getElementById('fehleranzeige');
       if (anzeige) anzeige.textContent = stand.fehler;
     }
@@ -2343,7 +2345,8 @@ function diagnoseStartwert(stelle, lauf) {
 }
 
 const diag = {
-  lauf: null,          // die laufende Diagnose, wird nach jeder Aufgabe gespeichert
+  lauf: null,          // die gerade bearbeitete Diagnose (eine aus laeufe)
+  laeufe: [],          // alle angefangenen Diagnosen, eine pro Kind und Stufe
   fertige: [],         // abgeschlossene Diagnosen
   bericht: null,       // die gerade angezeigte Diagnose
   start: 0,
@@ -2459,6 +2462,29 @@ function diagnoseErgebnis(lauf, eintrag) {
   }
 }
 
+// Laesst sich eine ausgewertete Diagnose wieder aufnehmen? Ja, wenn sie vorzeitig
+// beendet wurde und noch Stufen offen sind.
+function diagnoseFortsetzbar(lauf) {
+  return !!lauf && lauf.fassung === DIAGNOSE_FASSUNG && Object.values(lauf.spiele).some(s =>
+    s.status === 'abgebrochen' || (s.status === 'ausgelassen' && s.grund === 'Diagnose vorzeitig beendet'));
+}
+
+// Macht das vorzeitige Beenden rueckgaengig. Eine Gegenprobe, die beim Abbruch
+// noch ausstand, kommt als Erstes dran.
+function diagnoseWiederAufnehmen(lauf) {
+  lauf.ende = null;
+  lauf.aktuell = null;
+  lauf.schlange = [];
+  Object.entries(lauf.spiele).forEach(([key, s]) => {
+    if (s.status === 'abgebrochen') { s.status = 'laeuft'; s.grund = ''; }
+    if (s.status === 'ausgelassen' && s.grund === 'Diagnose vorzeitig beendet') { s.status = 'wartet'; s.grund = ''; }
+    const offen = s.status === 'laeuft' && s.stufen[s.idx];
+    if (offen && offen.length === 1 && offen[0].punkte === 0 && !offen[0].gegenprobe) {
+      lauf.schlange.push({ key, idx: s.idx, gegenprobe: true });
+    }
+  });
+}
+
 function diagnoseBeenden(lauf) {
   lauf.ende = Date.now();
   lauf.aktuell = null;
@@ -2559,17 +2585,20 @@ async function diagnoseLaden() {
   try {
     const text = await speicherLesen(DIAGNOSE_SCHLUESSEL);
     const daten = text ? JSON.parse(text) : null;
-    diag.lauf = (daten && daten.lauf) || null;
-    if (diag.lauf && diag.lauf.fassung !== DIAGNOSE_FASSUNG) diag.lauf = null;
+    // Fruehere Fassungen kannten nur eine einzige angefangene Diagnose
+    const laeufe = (daten && daten.laeufe) || (daten && daten.lauf ? [daten.lauf] : []);
+    diag.laeufe = laeufe.filter(l => l && l.fassung === DIAGNOSE_FASSUNG);
     diag.fertige = (daten && daten.fertige) || [];
+    diag.lauf = null;
   } catch (fehler) {
     diag.lauf = null;
+    diag.laeufe = [];
     diag.fertige = [];
   }
 }
 
 async function diagnoseSpeichern() {
-  const ok = await speicherSchreiben(JSON.stringify({ lauf: diag.lauf, fertige: diag.fertige }),
+  const ok = await speicherSchreiben(JSON.stringify({ laeufe: diag.laeufe, fertige: diag.fertige }),
                                      DIAGNOSE_SCHLUESSEL);
   diag.speicherVoll = !ok;
 }
@@ -2685,16 +2714,18 @@ function zeichneDiagnoseStart() {
       <span><strong>${b.name}</strong><br><small>${namen}</small></span></label>`;
   }).join('');
 
-  const laufend = lauf ? `
+  const laufend = diag.laeufe.length ? `
     <div class="liste dkasten">
-      <h2>Angefangene Diagnose</h2>
-      <p>${entschaerfen(lauf.name)}, ${planVon(lauf).name}, begonnen am ${datumText(lauf.beginn)},
-        ${lauf.nummer} ${lauf.nummer === 1 ? 'Aufgabe' : 'Aufgaben'} bearbeitet.</p>
-      <div class="knopfreihe" style="justify-content:flex-start;padding:0 16px 16px">
-        <button class="haupt" id="dweiter">Weitermachen</button>
-        <button class="schlicht" id="djetzt">Jetzt auswerten</button>
-        <button class="schlicht" id="dverwerfen">Verwerfen</button>
-      </div>
+      <h2>Angefangene Diagnosen</h2>
+      <table><thead><tr><th>Name</th><th>Stufe</th><th>Begonnen</th><th class="zeit">Bearbeitet</th>
+        <th class="zeit">Noch höchstens</th><th></th></tr></thead><tbody>
+      ${diag.laeufe.slice().sort((a, b) => b.beginn - a.beginn).map(l => `<tr>
+        <td>${entschaerfen(l.name)}</td><td>${planVon(l).name.split(':')[0]}</td><td>${datumText(l.beginn)}</td>
+        <td class="zeit">${l.nummer}</td><td class="zeit">${diagnoseRest(l)}</td>
+        <td class="zeit"><button class="haupt klein" data-dweiter="${entschaerfen(l.id)}">Weitermachen</button>
+          <button class="schlicht klein" data-djetzt="${entschaerfen(l.id)}">Auswerten</button>
+          <button class="schlicht klein" data-dverwerfen="${entschaerfen(l.id)}">Verwerfen</button></td></tr>`).join('')}
+      </tbody></table>
     </div>` : '';
 
   const fruehere = diag.fertige.slice().sort((a, b) => b.beginn - a.beginn).map(l => {
@@ -2702,6 +2733,7 @@ function zeichneDiagnoseStart() {
     return `<tr><td>${entschaerfen(l.name)}</td><td>${planVon(l).name.split(':')[0]}</td><td>${datumText(l.beginn)}</td>
       <td class="zeit">${a.aufgaben}</td><td class="zeit">${a.zuerst.length}</td>
       <td class="zeit"><button class="schlicht klein" data-oeffnen="${entschaerfen(l.id)}">Öffnen</button>
+        ${diagnoseFortsetzbar(l) ? `<button class="schlicht klein" data-fortsetzen="${entschaerfen(l.id)}">Fortsetzen</button>` : ''}
         <button class="schlicht klein" data-loeschen="${entschaerfen(l.id)}">Löschen</button></td></tr>`;
   }).join('');
 
@@ -2710,7 +2742,8 @@ function zeichneDiagnoseStart() {
     <h1>Diagnose</h1>
     <p class="unterzeile">Jedes Thema beginnt ganz leicht und wird nur schwerer, solange es klappt.
       Pro Aufgabe gibt es drei Versuche, eine Lösung wird nicht gezeigt. Es läuft keine Uhr.
-      Man kann jederzeit pausieren und später weitermachen.</p>
+      Man kann jederzeit pausieren, eine Diagnose für ein anderes Kind starten und später weitermachen.
+      Auch eine vorzeitig ausgewertete Diagnose lässt sich fortsetzen.</p>
     ${laufend}
     <div class="buehne dstartkasten">
       <p class="aufgabentext">Name des Kindes</p>
@@ -2757,24 +2790,32 @@ function zeichneDiagnoseStart() {
   document.getElementById('dstart').addEventListener('click', async ereignis => {
     const gewaehlt = [...blatt.querySelectorAll('.dwahl input:checked')].map(x => x.value);
     if (!gewaehlt.length) return;
-    if (diag.lauf && !zweimalTippen(ereignis.currentTarget, 'Angefangene verwerfen und neu starten?')) return;
     const name = document.getElementById('dname').value.trim() || 'Ohne Namen';
     diag.lauf = diagnoseAnlegen(name, gewaehlt, planWahl);
+    diag.laeufe.push(diag.lauf);
     diag.startName = '';
     await diagnoseSpeichern();
     diagnoseAufgabeStarten();
   });
 
-  if (lauf) {
-    document.getElementById('dweiter').addEventListener('click', diagnoseAufgabeStarten);
-    document.getElementById('djetzt').addEventListener('click', diagnoseAbschliessen);
-    document.getElementById('dverwerfen').addEventListener('click', async ereignis => {
-      if (!zweimalTippen(ereignis.currentTarget, 'Wirklich verwerfen?')) return;
-      diag.lauf = null;
-      await diagnoseSpeichern();
-      zeichnen();
-    });
-  }
+  const laufMit = id => diag.laeufe.find(l => String(l.id) === id);
+  blatt.querySelectorAll('[data-dweiter]').forEach(k => k.addEventListener('click', () => {
+    diag.lauf = laufMit(k.dataset.dweiter);
+    diagnoseAufgabeStarten();
+  }));
+  blatt.querySelectorAll('[data-djetzt]').forEach(k => k.addEventListener('click', () => {
+    diag.lauf = laufMit(k.dataset.djetzt);
+    diagnoseAbschliessen();
+  }));
+  blatt.querySelectorAll('[data-dverwerfen]').forEach(k => k.addEventListener('click', async () => {
+    if (!zweimalTippen(k, 'Wirklich verwerfen?')) return;
+    diag.laeufe = diag.laeufe.filter(l => String(l.id) !== k.dataset.dverwerfen);
+    diag.lauf = null;
+    await diagnoseSpeichern();
+    zeichnen();
+  }));
+  blatt.querySelectorAll('[data-fortsetzen]').forEach(k => k.addEventListener('click', () =>
+    diagnoseFortsetzen(diag.fertige.find(l => String(l.id) === k.dataset.fortsetzen))));
 
   blatt.querySelectorAll('[data-oeffnen]').forEach(k => k.addEventListener('click', () => {
     diag.bericht = diag.fertige.find(l => String(l.id) === k.dataset.oeffnen);
@@ -2872,6 +2913,7 @@ function zeichneDiagnoseAufgabe() {
     // neue Aufgabe derselben Art.
     if (diag.erledigt) diag.lauf.aktuell = null;
     await diagnoseSpeichern();
+    diag.lauf = null;
     stand.ansicht = 'dstart';
     zeichnen();
   });
@@ -2964,12 +3006,23 @@ async function diagnoseAbschliessen() {
   const lauf = diag.lauf;
   if (!lauf) return;
   diagnoseBeenden(lauf);
-  diag.fertige.push(lauf);
+  diag.laeufe = diag.laeufe.filter(l => l !== lauf);
+  if (!diag.fertige.includes(lauf)) diag.fertige.push(lauf);
   diag.lauf = null;
   diag.bericht = lauf;
   await diagnoseSpeichern();
   stand.ansicht = 'dbericht';
   zeichnen();
+}
+
+async function diagnoseFortsetzen(lauf) {
+  if (!diagnoseFortsetzbar(lauf)) return;
+  diagnoseWiederAufnehmen(lauf);
+  diag.fertige = diag.fertige.filter(l => l !== lauf);
+  diag.laeufe.push(lauf);
+  diag.lauf = lauf;
+  await diagnoseSpeichern();
+  diagnoseAufgabeStarten();
 }
 
 /* ---------- Bericht ---------- */
@@ -3047,6 +3100,7 @@ function zeichneDiagnoseBericht() {
       <button class="schlicht" id="dzurueck">Zur Diagnose-Übersicht</button>
       <span></span>
       <span>
+        ${diagnoseFortsetzbar(lauf) ? '<button class="haupt" id="dfortsetzen">Fortsetzen</button>' : ''}
         <button class="schlicht" id="dsichern">Als Datei sichern</button>
       </span>
     </div>
@@ -3083,6 +3137,8 @@ function zeichneDiagnoseBericht() {
 
   document.getElementById('dzurueck').addEventListener('click', () => { stand.ansicht = 'dstart'; zeichnen(); });
   document.getElementById('dsichern').addEventListener('click', () => diagnoseDatei(lauf));
+  const fortsetzen = document.getElementById('dfortsetzen');
+  if (fortsetzen) fortsetzen.addEventListener('click', () => diagnoseFortsetzen(lauf));
   blatt.querySelectorAll('[data-ueben]').forEach(k => k.addEventListener('click', () => {
     const [spiel, stufe] = k.dataset.ueben.split(':');
     stand.spiel = spiel;
@@ -3682,21 +3738,26 @@ spielAnmelden({
       });
       return erg;
     }
-    let falsch = 0;
+    // Jede der zehn Zahlen ist eine eigene Aufgabe. Fuer den Fehlerzaehler zaehlt
+    // jede falsche Antwort einmal; dieselbe falsche Zahl noch einmal zu pruefen
+    // zaehlt nicht erneut.
+    let falsch = 0, neuFalsch = 0;
+    a.zuletztFalsch = a.zuletztFalsch || {};
+    const bewerten = (feld, richtig, notiz) => {
+      ctx.markieren(feld, richtig);
+      if (richtig) { delete a.zuletztFalsch[feld]; return; }
+      falsch++;
+      ctx.notieren(notiz);
+      const wert = String(ctx.werte[feld]);
+      if (a.zuletztFalsch[feld] !== wert) neuFalsch++;
+      a.zuletztFalsch[feld] = wert;
+    };
     if (a.art === 'reihe') {
-      a.werte.forEach((soll, i) => {
-        const richtig = Number(ctx.werte['r' + i]) === soll;
-        ctx.markieren('r' + i, richtig);
-        if (!richtig) { falsch++; ctx.notieren((i + 1) + ' · ' + a.n); }
-      });
+      a.werte.forEach((soll, i) => bewerten('r' + i, Number(ctx.werte['r' + i]) === soll, (i + 1) + ' · ' + a.n));
     } else {
-      a.zeilen.forEach((z, i) => {
-        const richtig = Number(ctx.werte['z' + i]) === z.soll;
-        ctx.markieren('z' + i, richtig);
-        if (!richtig) { falsch++; ctx.notieren(einmaleinsNotiz(z)); }
-      });
+      a.zeilen.forEach((z, i) => bewerten('z' + i, Number(ctx.werte['z' + i]) === z.soll, einmaleinsNotiz(z)));
     }
-    return { falsche: falsch ? [falsch === 1 ? 'eine Zahl' : falsch + ' Zahlen'] : [] };
+    return { falsche: falsch ? [falsch === 1 ? 'eine Zahl' : falsch + ' Zahlen'] : [], fehlerAnzahl: neuFalsch };
   },
 
   loesung(a, ctx) {
