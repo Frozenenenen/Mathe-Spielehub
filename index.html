@@ -5857,6 +5857,8 @@ spielAnmelden({
 // Alle Zahlen werden als ganze Tausendstel gefuehrt, damit beim Runden keine
 // Rundungsfehler des Rechners hineinspielen. 5433,345 ist also 5433345.
 const RUNDUNGSSTELLEN = [
+  { name: 'Hunderttausender', wert: 100000000, stellen: 0 },
+  { name: 'Zehntausender',    wert: 10000000,  stellen: 0 },
   { name: 'Tausender',   wert: 1000000, stellen: 0 },
   { name: 'Hunderter',   wert: 100000,  stellen: 0 },
   { name: 'Zehner',      wert: 10000,   stellen: 0 },
@@ -5865,6 +5867,20 @@ const RUNDUNGSSTELLEN = [
   { name: 'Hundertstel', wert: 10,      stellen: 2 },
   { name: 'Tausendstel', wert: 1,       stellen: 3 }
 ];
+
+// Grosse ganze Zahlen in Dreiergruppen, wie im Referenzdokument: 345 678
+function inGruppen(text) {
+  return /^\d{5,}$/.test(text) ? text.replace(/\B(?=(\d{3})+(?!\d))/g, '\u202F') : text;
+}
+
+// Liest die gerundete Zahl. Bei ganzen Zahlen sind Leerzeichen und Punkte als
+// Tausendertrennung erlaubt (345 000 oder 345.000), bei Kommazahlen nicht.
+function rundenEingabe(text, r) {
+  // Leerzeichen sind nie Teil der Zahl. Punkte nur bei ganzen Zahlen als
+  // Tausendertrennung, sonst koennte 4.5 auch als 4,5 gemeint sein.
+  const roh = String(text === undefined ? '' : text).replace(/[\s\u2009\u202F]/g, '');
+  return tausendstelAusEingabe(r.nachkommastellen ? roh : roh.replace(/\./g, ''));
+}
 
 function rundeAuf(zahl, stelle) {
   return Math.round(zahl / stelle) * stelle;
@@ -5893,11 +5909,12 @@ function rundenAufgabe(stufe, vorgabe) {
 
   const erlaubt = {
     1: ['Zehner'],
-    3: ['Hunderter', 'Tausender'],
+    3: ['Zehner', 'Hunderter', 'Tausender'],
     4: ['Zehntel', 'Hundertstel'],
-    5: ['Tausender', 'Hunderter', 'Zehner', 'Einer', 'Zehntel', 'Hundertstel']
+    5: ['Tausender', 'Hunderter', 'Zehner', 'Einer', 'Zehntel', 'Hundertstel'],
+    6: ['Zehner', 'Hunderter', 'Tausender', 'Zehntausender', 'Hunderttausender']
   }[stufe];
-  const nachkommastellen = stufe <= 3 ? 0 : 3;
+  const nachkommastellen = stufe <= 3 || stufe === 6 ? 0 : 3;
 
   for (let versuch = 0; versuch < 400; versuch++) {
     const zielName = erlaubt[zufall(0, erlaubt.length - 1)];
@@ -5905,7 +5922,11 @@ function rundenAufgabe(stufe, vorgabe) {
     const ziel = RUNDUNGSSTELLEN[zielIdx];
     const entscheid = RUNDUNGSSTELLEN[zielIdx + 1];
 
-    const wert = nachkommastellen === 0
+    // Stufe 6: fuenf- und sechsstellige Zahlen, damit es auf jede Stelle bis
+    // zu den Hunderttausendern etwas zu runden gibt
+    const wert = stufe === 6
+      ? zufall(10000, 999999) * 1000
+      : nachkommastellen === 0
       ? zufall(Math.max(ziel.wert / 1000, 10), 9999) * 1000
       : zufall(1, 9999) * 1000 + zufall(0, 999);
 
@@ -5923,9 +5944,9 @@ function rundenAufgabe(stufe, vorgabe) {
       art: 'runden', wert, ziel, entscheid, ziffern, zielPos, entscheidPos,
       markieren: !(vorgabe && vorgabe.ohneMarkieren),
       nachkommastellen,
-      text: tausendstelText(wert, nachkommastellen),
+      text: inGruppen(tausendstelText(wert, nachkommastellen)),
       loesung: geloest,
-      loesungText: tausendstelText(geloest, ziel.stellen)
+      loesungText: inGruppen(tausendstelText(geloest, ziel.stellen))
     };
   }
   return rundenAufgabe(1, vorgabe);
@@ -5946,9 +5967,13 @@ function feldRunden() {
   }
 
   if (r.art === 'runden') {
+    // Bei grossen Zahlen nach jeder Dreiergruppe etwas Abstand
+    const ganzStellen = r.ziffern.findIndex(z => z.zeichen === ',');
+    const anzahlGanz = ganzStellen < 0 ? r.ziffern.length : ganzStellen;
+    const luecke = i => anzahlGanz >= 5 && i < anzahlGanz - 1 && (anzahlGanz - 1 - i) % 3 === 0;
     const ziffern = r.ziffern.map((z, i) => z.zeichen === ','
       ? `<span>,</span>`
-      : `<button type="button" class="rziffer" data-stelle="${i}"
+      : `<button type="button" class="rziffer" data-stelle="${i}"${luecke(i) ? ' style="margin-right:14px"' : ''}
            aria-label="Ziffer ${z.zeichen} markieren">${z.zeichen}</button>`).join('');
 
     return `<p class="aufgabentext">Runde auf <strong>${r.ziel.name}</strong>.
@@ -5992,9 +6017,9 @@ spielAnmelden({
   id: 'runden',
   name: 'Runden und schätzen',
     beschreibung: 'Auf Zehner oder Hunderter runden und mit den gerundeten Zahlen die Summe überschlagen.',
-    stufen: ['auf Zehner', 'Überschlag', 'Hunderter und Tausender',
-             'Zehntel und Hundertstel', 'alles gemischt'],
-    klassen: [3, 3, 4, 5, 5],
+    stufen: ['auf Zehner', 'Überschlag', 'Zehner, Hunderter, Tausender',
+             'Zehntel und Hundertstel', 'alles gemischt', 'Zehner bis Hunderttausender'],
+    klassen: [3, 3, 4, 5, 5, 4],
     bild: `<svg viewBox="0 0 60 44" width="60" height="44" aria-hidden="true">
       <line x1="6" y1="30" x2="54" y2="30" stroke="#16263F" stroke-width="2"/>
       <g stroke="#16263F" stroke-width="2"><line x1="10" y1="24" x2="10" y2="36"/>
@@ -6041,7 +6066,7 @@ spielAnmelden({
     let hinweis = '';
     const r = a;
     if (r.art === 'runden' && r.markieren === false) {
-      const richtig = tausendstelAusEingabe(ctx.werte.wert) === r.loesung;
+      const richtig = rundenEingabe(ctx.werte.wert, r) === r.loesung;
       ctx.markieren('wert', richtig);
       if (!richtig) falsche.push('die gerundete Zahl');
     } else if (r.art === 'runden') {
@@ -6057,7 +6082,7 @@ spielAnmelden({
       if (!zielOk) falsche.push('die markierte Rundungsstelle');
       if (!entscheidOk) falsche.push('die markierte entscheidende Ziffer');
 
-      const eingabe = tausendstelAusEingabe(ctx.werte.wert);
+      const eingabe = rundenEingabe(ctx.werte.wert, r);
       const richtig = eingabe === r.loesung;
       ctx.markieren('wert', richtig);
       if (!richtig) falsche.push('die gerundete Zahl');
@@ -6261,6 +6286,78 @@ spielAnmelden({
     });
     felderEintragen(werte, ctx);
   }
+});
+
+
+/* ----- spiele/schriftmix.js ----- */
+// ============================================================
+// schriftmix
+// Grundrechenarten schriftlich: Addition, Subtraktion, Multiplikation und
+// Division im Wechsel. Das Spiel erzeugt selbst nichts, sondern leiht sich die
+// Aufgaben bei den vier Einzelspielen. Jede Runde kommt jedes Verfahren genau
+// einmal dran, in zufaelliger Reihenfolge.
+// Die Aufgabe ist das Aufgabenobjekt des Einzelspiels, ergaenzt um mixOp. So
+// finden die Einzelspiele ihre Aufgabe wie gewohnt in stand.aufgabe.
+// ============================================================
+
+// Welche Stufe der Einzelspiele zu welcher Mix-Stufe gehoert
+const SCHRIFTMIX_STUFEN = {
+  1: { addition: 2, subtraktion: 2, multiplikation: 1, schriftdivision: 1 },
+  2: { addition: 3, subtraktion: 3, multiplikation: 2, schriftdivision: 2 },
+  3: { addition: 4, subtraktion: 4, multiplikation: 3, schriftdivision: 3 },
+  4: { addition: 4, subtraktion: 4, multiplikation: 4, schriftdivision: 4 }
+};
+const SCHRIFTMIX_NAMEN = {
+  addition: 'Plus', subtraktion: 'Minus', multiplikation: 'Mal', schriftdivision: 'Geteilt'
+};
+
+let schriftmixWarteschlange = [];
+
+function schriftmixAufgabe(stufe) {
+  // Zu Beginn jeder Runde (und falls die Reihe leer ist) neu mischen
+  if (stand.nummer === 0 || !schriftmixWarteschlange.length) {
+    schriftmixWarteschlange = mischen(Object.keys(SCHRIFTMIX_NAMEN).slice());
+  }
+  const op = schriftmixWarteschlange.shift();
+  const aufgabe = SPIELMODULE[op].aufgabe(SCHRIFTMIX_STUFEN[stufe][op]);
+  aufgabe.mixOp = op;
+  return aufgabe;
+}
+
+function schriftmixModul(a) {
+  return SPIELMODULE[a && a.mixOp] || SPIELMODULE.addition;
+}
+
+spielAnmelden({
+  id: 'schriftmix',
+  name: 'Grundrechenarten schriftlich',
+  beschreibung: 'Plus, Minus, Mal und Geteilt im Wechsel. Jede Runde kommt jedes schriftliche Verfahren einmal dran.',
+  stufen: ['dreistellig', 'mit Rest und Nullen', 'vierstellig', 'große Zahlen'],
+  klassen: [3, 4, 4, 5],
+  aufgaben: 4,
+  bild: `<svg viewBox="0 0 60 44" width="60" height="44" aria-hidden="true">
+      <g font-size="17" font-weight="bold" text-anchor="middle">
+        <text x="16" y="19" fill="#1D4ED8">+</text><text x="44" y="19" fill="#16263F">−</text>
+        <text x="16" y="39" fill="#16263F">·</text><text x="44" y="39" fill="#1D4ED8">:</text>
+      </g>
+      <path d="M30 4 V40 M6 22 H54" stroke="#CBD5E1" stroke-width="1.5"/>
+    </svg>`,
+
+  aufgabe: schriftmixAufgabe,
+
+  feld(a, ctx) {
+    return `<p class="aufgabentext" style="margin-bottom:4px"><span class="marke2">${SCHRIFTMIX_NAMEN[a.mixOp]}</span></p>`
+      + schriftmixModul(a).feld(a, ctx);
+  },
+
+  binden(a, ctx) {
+    const m = schriftmixModul(a);
+    if (m.binden) m.binden(a, ctx);
+  },
+
+  pruefe(a, ctx) { return schriftmixModul(a).pruefe(a, ctx); },
+
+  loesung(a, ctx) { return schriftmixModul(a).loesung(a, ctx); }
 });
 
 
