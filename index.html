@@ -386,6 +386,21 @@ window.addEventListener('error', function (e) {
   .rstrich { height: 3px; background: var(--tinte); border-radius: 2px; }
   .rzelle.unterstrich { border-bottom: 3px solid var(--tinte); }
   .rzelle.klein { font-size: 20px; color: var(--grau); }
+  /* Komma ohne eigene Spalte, rechts unten an der Zelle */
+  .rzelle.komma { position: relative; }
+  .rzelle.komma::after { content: ','; position: absolute; right: -4px; bottom: 0; font-size: 26px; font-weight: bold; }
+  /* Enges Raster fuer lange Divisionen mit Komma; notfalls seitlich schieben */
+  .rechnungsrahmen { max-width: 100%; overflow-x: auto; display: flex; justify-content: center; }
+  .rechnung.eng { gap: 2px; }
+  .rechnung.eng .rzeile { gap: 2px; }
+  .rechnung.eng .rzelle { width: 34px; height: 36px; font-size: 21px; }
+  .rechnung.eng .rzelle input { width: 32px; height: 33px; font-size: 19px; }
+  .rechnung.eng .rzeichen { width: 22px; font-size: 21px; }
+  .rechnung.eng .rzelle.klein { font-size: 17px; }
+  .rechnung.eng .rzelle.komma::after { font-size: 22px; right: -3px; }
+  .bruchanzeige { display: inline-flex; flex-direction: column; align-items: center; vertical-align: middle;
+                  font-weight: bold; font-size: 20px; margin: 0 4px; line-height: 1.1; }
+  .bruchanzeige span:first-child { border-bottom: 2px solid var(--tinte); padding: 0 4px; }
   .ruebertrag { height: 34px; }
   .ukreis {
     width: 34px; height: 32px; padding: 0;
@@ -550,6 +565,11 @@ window.addEventListener('error', function (e) {
   .optionsknopf { font: inherit; font-weight: bold; min-width: 56px; padding: 8px 12px; cursor: pointer;
                   background: #fff; color: var(--tinte); border: 2px solid var(--karo); border-radius: 6px; }
   .optionsknopf[aria-pressed="true"] { background: var(--blau); border-color: var(--blau); color: #fff; }
+
+  /* ---------- Bestenliste je Stufe ---------- */
+  .stufenrang { border-top: 1px solid var(--karo); }
+  .stufenrang h3 { font-size: 16px; margin: 0; padding: 12px 16px 8px; display: flex; align-items: center; gap: 8px; }
+  .stufenrang .klassenmarke { margin: 0; }
 
 
 /* aus einem Spielmodul */
@@ -1242,7 +1262,9 @@ function zeichneHub() {
     </button>`;
   }).join('');
 
-  const alle = stand.bestenliste.slice().sort((a, b) => a.ms - b.ms).slice(0, 8);
+  // Zeiten verschiedener Spiele und Stufen lassen sich nicht vergleichen. Die
+  // Ranglisten stehen deshalb beim jeweiligen Spiel, hier nur das Zuletzt-Gespielte.
+  const alle = stand.bestenliste.slice().sort((a, b) => (b.datum || 0) - (a.datum || 0)).slice(0, 6);
   const listeInhalt = alle.length
     ? `<table><thead><tr><th>Name</th><th>Spiel</th><th>Stufe</th><th class="zeit">Zeit</th>
         <th class="zeit">Fehler</th></tr></thead><tbody>
@@ -1250,13 +1272,14 @@ function zeichneHub() {
           <td>${stufenText(e.spiel, e.stufe, e.option)}</td><td class="zeit">${zeitText(e.ms)}</td>
           <td class="zeit">${fehlerText(e)}</td></tr>`).join('')}
       </tbody></table>`
-    : `<p>Hier stehen die schnellsten Runden, sobald jemand ein Spiel beendet hat.</p>`;
+    : `<p>Hier stehen die letzten Runden, sobald jemand ein Spiel beendet hat.</p>`;
 
   blatt.innerHTML = `
     <h1>Mathe-Spiele</h1>
     <p class="unterzeile">Fünf Aufgaben pro Runde. Die Zeit läuft ab der ersten Aufgabe.</p>
     <div class="kacheln">${kacheln}</div>
-    <div class="liste"><h2>Schnellste Runden</h2>${listeInhalt}</div>
+    <div class="liste"><h2>Zuletzt gespielt</h2>${listeInhalt}
+      ${alle.length ? '<p>Die Bestenlisten stehen beim jeweiligen Spiel, getrennt nach Stufe.</p>' : ''}</div>
     <p class="unterzeile" style="margin-top:12px">${speicherHinweis()}</p>
     <div class="knopfreihe" style="justify-content:flex-start">
       <button class="schlicht" id="sichern">Liste als Datei sichern</button>
@@ -1301,6 +1324,28 @@ function spielWaehlen(id) {
   zeichnen();
 }
 
+// Ranglisten eines Spiels, eine Tabelle pro Stufe, jeweils die fuenf besten Zeiten.
+// Bei Spielen mit Wahl (etwa der Einmaleins-Reihe) gilt die gerade gewaehlte.
+function bestenlisteFuerSpiel(spielId, option) {
+  const spiel = SPIELE[spielId];
+  const zusatz = optionText(spielId, option);
+  const tabellen = spiel.stufen.map((name, i) => {
+    const liste = rangliste(spielId, i + 1, option);
+    if (!liste.length) return '';
+    const klasse = klasseFuerStufe(spielId, i + 1);
+    return `<div class="stufenrang">
+      <h3>${name}${klasse ? ` <span class="klassenmarke">Klasse ${klasse}</span>` : ''}</h3>
+      <table><thead><tr><th>Platz</th><th>Name</th><th class="zeit">Zeit</th><th class="zeit">Fehler</th>
+        <th class="zeit">Datum</th></tr></thead><tbody>
+      ${liste.slice(0, 5).map((e, k) => `<tr><td>${k + 1}</td><td>${entschaerfen(e.name)}</td>
+        <td class="zeit">${zeitText(e.ms)}</td><td class="zeit">${fehlerText(e)}</td>
+        <td class="zeit">${e.datum ? new Date(e.datum).toLocaleDateString('de-DE') : '–'}</td></tr>`).join('')}
+      </tbody></table></div>`;
+  }).join('');
+  return `<div class="liste"><h2>Bestenliste${zusatz ? ' (' + zusatz + ')' : ''}</h2>
+    ${tabellen || '<p>Noch keine Einträge. Wer eine Runde schafft, kann sich hier eintragen.</p>'}</div>`;
+}
+
 function zeichneAuswahl() {
   const spiel = SPIELE[stand.spiel];
   const knoepfe = spiel.stufen.map((text, i) => {
@@ -1327,7 +1372,8 @@ function zeichneAuswahl() {
       <div class="optionsbereich">${[...new Set(spiel.option.werte.map(w => (w.gruppe === undefined ? 1 : w.gruppe)))].sort((x, y) => x - y).map(g => `<div class="optionswahl">${
         spiel.option.werte.filter(w => (w.gruppe === undefined ? 1 : w.gruppe) === g).map(w => `<button class="optionsknopf"
         data-option="${w.wert}" aria-pressed="${w.wert === aktuelleOption()}">${w.text}</button>`).join('')}</div>`).join('')}</div>` : ''}
-    <div class="kacheln">${knoepfe}</div>`;
+    <div class="kacheln">${knoepfe}</div>
+    ${bestenlisteFuerSpiel(stand.spiel, aktuelleOption())}`;
 
   blatt.querySelectorAll('.optionsknopf').forEach(k => k.addEventListener('click', () => {
     stand.optionen = stand.optionen || {};
@@ -6122,7 +6168,114 @@ function inZellen(text, m, ende) {
   return zellen;
 }
 
+// Baut das Divisionsschema fuer eine ganze Zahl. zifD sind die Ziffern des
+// Dividenden, restBreite die hoechste Stellenzahl eines Rests.
+function divisionSchema(zifD, divisor, restBreite) {
+  const m = zifD.length;
+  const produktBreite = restBreite + 1;
+
+  // Wie viele Ziffern braucht der erste Schritt?
+  let start = 0, anfang = 0;
+  while (start < m) {
+    anfang = anfang * 10 + Number(zifD[start]);
+    start++;
+    if (anfang >= divisor) break;
+  }
+  if (anfang < divisor) return null;          // Divisor passt nirgends hinein
+
+  const schritte = [];
+  let uebrig = anfang;
+  for (let spalte = start - 1; spalte < m; spalte++) {
+    if (spalte > start - 1) uebrig = uebrig * 10 + Number(zifD[spalte]);
+    const qZiffer = Math.floor(uebrig / divisor);
+    const produkt = qZiffer * divisor;
+    const restWert = uebrig - produkt;
+    schritte.push({
+      spalte, qZiffer, produkt, restWert,
+      produktZellen: inZellen(String(produkt), m, spalte),
+      restZellen: inZellen(String(restWert), m, spalte),
+      herunter: spalte + 1 < m ? zifD[spalte + 1] : null
+    });
+    uebrig = restWert;
+  }
+
+  const zifQ = new Array(m).fill(' ');
+  schritte.forEach(sch => { zifQ[sch.spalte] = String(sch.qZiffer); });
+  return { divisor, rest: uebrig, spalten: m, zifD, zifQ, schritte,
+           produktBreite, restBreite, ersteSpalte: start - 1 };
+}
+
+// Stufe 5: Bruch in Dezimalzahl. Nur Nenner, bei denen die Division nach
+// hoechstens drei Nachkommastellen aufgeht. An den Zaehler werden so viele
+// Nullen gehaengt, wie Nachkommastellen herauskommen.
+const KOMMA_NENNER = [2, 4, 5, 8, 20, 25, 40, 50];
+
+// Stufe 6: Zaehler und Nenner bis dreistellig, oft groesser als 1.
+// Gebaut wird rueckwaerts: Ein Nenner, der die Division aufgehen laesst (Teiler
+// von 1000), wird mit einem Faktor erweitert, den der Zaehler ebenfalls hat.
+// So entstehen auch Brueche wie 147/84 = 1,75, deren Nenner nicht nach 1000 aussieht.
+const KOMMA_GRUNDNENNER = [2, 4, 5, 8, 20, 25, 40, 50, 125, 200, 250];
+
+function grosserBruch() {
+  for (let versuch = 0; versuch < 500; versuch++) {
+    const grund = KOMMA_GRUNDNENNER[zufall(0, KOMMA_GRUNDNENNER.length - 1)];
+    const faktor = zufall(1, 3) === 1 ? 1 : zufall(2, 12);
+    const nenner = grund * faktor;
+    if (nenner < 10 || nenner > 999) continue;
+    // Haelfte unecht (Ergebnis groesser als 1), Haelfte echt
+    const w = zufall(0, 1) === 0 ? zufall(grund + 1, 4 * grund) : zufall(1, grund - 1);
+    const zaehler = w * faktor;
+    if (zaehler > 999 || zaehler < 10 || zaehler % nenner === 0) continue;
+    return { zaehler, nenner };
+  }
+  return { zaehler: 347, nenner: 125 };
+}
+
+function kommaDivisionAufgabe(gross) {
+  for (let versuch = 0; versuch < 500; versuch++) {
+    let zaehler, nenner;
+    if (gross) {
+      ({ zaehler, nenner } = grosserBruch());
+    } else {
+      nenner = KOMMA_NENNER[zufall(0, KOMMA_NENNER.length - 1)];
+      // Meist echte Brueche, manchmal unechte wie 7/4
+      zaehler = zufall(1, 3) === 1 ? zufall(nenner + 1, 3 * nenner) : zufall(1, nenner - 1);
+    }
+    if (zaehler % nenner === 0) continue;
+    let k = 1;
+    while (k <= 3 && (zaehler * Math.pow(10, k)) % nenner !== 0) k++;
+    if (k > 3) continue;
+
+    const zifZ = String(zaehler).split('');
+    const zifD = zifZ.concat(new Array(k).fill('0'));
+    const schema = divisionSchema(zifD, nenner, String(nenner).length);
+    if (!schema) continue;
+
+    // Das Komma steht hinter der letzten Ziffer des Zaehlers. Fehlt im Ergebnis
+    // eine Ziffer vor oder direkt nach dem Komma, kommt dort eine Null hin: 0,025
+    const kommaSpalte = zifZ.length - 1;
+    for (let j = kommaSpalte; j < schema.ersteSpalte; j++) schema.zifQ[j] = '0';
+    const ganz = Math.floor(zaehler / nenner);
+    const dezimal = (zaehler * Math.pow(10, k) / nenner) % Math.pow(10, k);
+    return Object.assign(schema, {
+      art: 'komma', zaehler, nenner, kommaSpalte, nachkomma: k,
+      dividend: Number(zifD.join('')),
+      quotient: Number(zifD.join('')) / nenner,
+      ergebnisText: ganz + ',' + String(dezimal).padStart(k, '0')
+    });
+  }
+  return null;
+}
+
+// Erste Spalte mit Ergebnisfeld. Bei Kommaaufgaben werden vorn nur so viele
+// Felder gezeigt, wie gebraucht werden, plus eines.
+function ergebnisVon(d) {
+  return d.art === 'komma' ? Math.max(0, Math.min(d.kommaSpalte, d.ersteSpalte) - 1) : 0;
+}
+
 function schriftdivisionAufgabe(stufe) {
+  if (stufe === 5) return kommaDivisionAufgabe(false);
+  if (stufe === 6) return kommaDivisionAufgabe(true);
   const plan = {
     1: { stellen: 3, divisor: [2, 9],   mitRest: false },
     2: { stellen: 3, divisor: [2, 9],   mitRest: true },
@@ -6137,43 +6290,9 @@ function schriftdivisionAufgabe(stufe) {
     const divisor = zufall(plan.divisor[0], plan.divisor[1]);
     const dividend = zufall(min, max);
     if (!plan.mitRest && dividend % divisor !== 0) continue;
-
-    const zifD = String(dividend).split('');
-    const m = plan.stellen;
-    const restBreite = String(plan.divisor[1]).length;
-    const produktBreite = restBreite + 1;
-
-    // Wie viele Ziffern braucht der erste Schritt?
-    let start = 0, anfang = 0;
-    while (start < m) {
-      anfang = anfang * 10 + Number(zifD[start]);
-      start++;
-      if (anfang >= divisor) break;
-    }
-    if (anfang < divisor) continue;          // Divisor passt nirgends hinein
-
-    const schritte = [];
-    let uebrig = anfang;
-    for (let spalte = start - 1; spalte < m; spalte++) {
-      if (spalte > start - 1) uebrig = uebrig * 10 + Number(zifD[spalte]);
-      const qZiffer = Math.floor(uebrig / divisor);
-      const produkt = qZiffer * divisor;
-      const restWert = uebrig - produkt;
-      schritte.push({
-        spalte, qZiffer, produkt, restWert,
-        produktZellen: inZellen(String(produkt), m, spalte),
-        restZellen: inZellen(String(restWert), m, spalte),
-        herunter: spalte + 1 < m ? zifD[spalte + 1] : null
-      });
-      uebrig = restWert;
-    }
-
-    const quotient = Math.floor(dividend / divisor);
-    const zifQ = new Array(m).fill(' ');
-    schritte.forEach(sch => { zifQ[sch.spalte] = String(sch.qZiffer); });
-
-    return { dividend, divisor, quotient, rest: uebrig, spalten: m,
-             zifD, zifQ, schritte, produktBreite, restBreite, ersteSpalte: start - 1 };
+    const schema = divisionSchema(String(dividend).split(''), divisor, String(plan.divisor[1]).length);
+    if (!schema) continue;
+    return Object.assign(schema, { dividend, quotient: Math.floor(dividend / divisor) });
   }
   return null;
 }
@@ -6183,11 +6302,16 @@ function feldSchriftdivision() {
   const zelle = (inhalt, klasse) => `<div class="rzelle${klasse ? ' ' + klasse : ''}">${inhalt}</div>`;
 
   // Kopfzeile: Dividend, Doppelpunkt, Divisor, Gleichheitszeichen, Ergebnisfelder
-  const kopf = d.zifD.map(z => zelle(z)).join('') +
+  // Bei Kommaaufgaben bleiben vorn nur so viele Ergebnisfelder, wie gebraucht
+  // werden, plus eines. Das spart Platz, ohne die Laenge zu verraten.
+  const qVon = ergebnisVon(d);
+  // Das Komma sitzt rechts an der Zelle, es braucht keine eigene Spalte
+  const komma = j => (d.art === 'komma' && j === d.kommaSpalte ? 'komma' : '');
+  const kopf = d.zifD.map((z, j) => zelle(z, komma(j))).join('') +
     zelle(':') + String(d.divisor).split('').map(z => zelle(z)).join('') + zelle('=') +
-    d.zifQ.map((_, j) => zelle(
+    d.zifQ.map((_, j) => j < qVon ? '' : zelle(
       `<input type="number" inputmode="numeric" data-feld="q${j}" data-frei="1" data-ziffer="rechts"
-         aria-label="Ergebnisziffer ${j + 1}">`)).join('');
+         aria-label="Ergebnisziffer ${j + 1}">`, komma(j))).join('');
 
   const zeilen = d.schritte.map((sch, i) => {
     const pVon = Math.max(0, sch.spalte - d.produktBreite + 1);
@@ -6215,6 +6339,17 @@ function feldSchriftdivision() {
             <div class="rzeile"><span class="rzeichen"></span>${rest.join('')}</div>`;
   }).join('');
 
+  if (d.art === 'komma') {
+    return `<p class="aufgabentext">Schreibe den Bruch
+      <span class="bruchanzeige"><span>${d.zaehler}</span><span>${d.nenner}</span></span>
+      als Dezimalzahl. Rechne dazu ${d.zaehler} : ${d.nenner} schriftlich. Die Nullen hinter dem
+      Komma sind schon angehängt. Im Ergebnis steht das Komma an derselben Stelle.</p>
+      <div class="rechnungsrahmen"><div class="rechnung eng">
+        <div class="rzeile"><span class="rzeichen"></span>${kopf}</div>
+        ${zeilen}
+      </div></div>`;
+  }
+
   return `<p class="aufgabentext">Rechne von links nach rechts: Wie oft passt der Divisor hinein,
     malnehmen, abziehen, nächste Ziffer herunterholen. Die kleinen Ziffern sind schon
     heruntergeholt.</p>
@@ -6228,8 +6363,9 @@ spielAnmelden({
   id: 'schriftdivision',
   name: 'Schriftlich dividieren',
     beschreibung: 'Das ganze Schema: teilen, malnehmen, abziehen, nächste Ziffer herunterholen.',
-    stufen: ['dreistellig, geht auf', 'dreistellig mit Rest', 'vierstellig', 'zweistelliger Divisor'],
-    klassen: [4, 4, 4, 5],
+    stufen: ['dreistellig, geht auf', 'dreistellig mit Rest', 'vierstellig', 'zweistelliger Divisor',
+             'Bruch als Dezimalzahl', 'große Brüche als Dezimalzahl'],
+    klassen: [4, 4, 4, 5, 6, 6],
     aufgaben: 3,
     bild: `<svg viewBox="0 0 60 44" width="60" height="44" aria-hidden="true">
       <text x="4" y="12" font-size="12" font-weight="bold" fill="#16263F">876 : 4 = 219</text>
@@ -6251,6 +6387,13 @@ spielAnmelden({
     const namenQ = d.zifQ.map((_, j) => 'q' + j);
     const gQ = gruppePruefen(namenQ, String(d.quotient), ctx.werte);
     if (gQ.leer) offen = true; else if (!gQ.richtig) ergebnisFalsch++;
+    let ohneNull = false;
+    if (d.art === 'komma' && !gQ.leer && gQ.richtig
+        && String(ctx.werte['q' + d.kommaSpalte] || '').trim() === '') {
+      ergebnisFalsch++;
+      ohneNull = true;
+      ctx.markieren('q' + d.kommaSpalte, false);
+    }
 
     d.schritte.forEach((sch, i) => {
       const pVon = Math.max(0, sch.spalte - d.produktBreite + 1);
@@ -6269,13 +6412,15 @@ spielAnmelden({
     if (offen) return { offen: 'Es fehlt noch eine Eingabe.' };
     if (ergebnisFalsch) falsche.push('Ergebnis');
     if (schemaFalsch) falsche.push('Schema');
-    hinweis = divisionMeldung(ergebnisFalsch, schemaFalsch);
+    hinweis = ohneNull && !schemaFalsch
+      ? 'Vor dem Komma fehlt noch eine Ziffer. Wenn der Nenner nicht ganz hineinpasst, steht dort eine 0.'
+      : divisionMeldung(ergebnisFalsch, schemaFalsch);
     return { falsche, hinweis };
   },
 
   loesung(a, ctx) {
     const werte = {};
-    a.zifQ.forEach((z, j) => { werte['q' + j] = z === ' ' ? '' : z; });
+    a.zifQ.forEach((z, j) => { if (j >= ergebnisVon(a)) werte['q' + j] = z === ' ' ? '' : z; });
     a.schritte.forEach((sch, i) => {
       const pVon = Math.max(0, sch.spalte - a.produktBreite + 1);
       for (let j = pVon; j <= sch.spalte; j++)
